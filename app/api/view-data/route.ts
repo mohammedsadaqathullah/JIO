@@ -3,34 +3,38 @@ import fs from 'fs/promises';
 import path from 'path';
 
 export async function GET() {
-    try {
-        const dbUrl = process.env.DATABASE_URL;
-        const sql = dbUrl && (dbUrl.includes('neon.tech') || dbUrl.includes('neon.ms')) ? neon(dbUrl) : null;
+    const dbUrl = process.env.DATABASE_URL;
+    let dbEntries = [];
+    let fileEntries = [];
 
-        let dbData = [];
-        if (sql) {
+    try {
+        // 1. Try to fetch from Postgres
+        if (dbUrl) {
             try {
-                dbData = await sql`SELECT * FROM user_signups ORDER BY created_at DESC;`;
-            } catch (e) {
-                console.error('DB fetch failed', e);
+                const sql = neon(dbUrl);
+                dbEntries = await sql`SELECT * FROM user_signups ORDER BY created_at DESC;`;
+            } catch (dbError: any) {
+                console.error('[API] Database Fetch Error:', dbError.message);
             }
         }
 
-        let fileData = [];
-        try {
-            const filePath = path.join(process.cwd(), 'data', 'submissions.json');
-            const content = await fs.readFile(filePath, 'utf-8');
-            fileData = JSON.parse(content);
-        } catch (e) {
-            // File not found is OK
+        // 2. Try to fetch from local file (Only if NOT on Vercel)
+        if (!process.env.VERCEL) {
+            try {
+                const filePath = path.join(process.cwd(), 'data', 'submissions.json');
+                const content = await fs.readFile(filePath, 'utf-8');
+                fileEntries = JSON.parse(content);
+            } catch (fileError) {
+                // File doesn't exist yet, which is fine
+            }
         }
 
         return Response.json({
-            db: dbData,
-            file: fileData,
-            total: dbData.length + fileData.length
+            db: dbEntries,
+            file: fileEntries
         });
-    } catch (error) {
-        return Response.json({ error: 'Failed to fetch data' }, { status: 500 });
+    } catch (error: any) {
+        console.error('[API] Error viewing data:', error.message);
+        return Response.json({ error: 'Failed to fetch leads' }, { status: 500 });
     }
 }

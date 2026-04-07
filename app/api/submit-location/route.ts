@@ -4,8 +4,10 @@ import path from 'path';
 
 // Initialize neon only if DATABASE_URL is present and looks like a Neon URL
 // Otherwise, we'll use local file fallback
+// Initialize neon database connection
 const dbUrl = process.env.DATABASE_URL;
-const sql = dbUrl && (dbUrl.includes('neon.tech') || dbUrl.includes('neon.ms')) ? neon(dbUrl) : null;
+// On Vercel, we always want to use the database.
+const sql = dbUrl ? neon(dbUrl) : null;
 
 interface RequestBody {
   latitude?: number;
@@ -13,21 +15,24 @@ interface RequestBody {
   phoneNumber?: string;
 }
 
+// Helper to save to local file (only used during local development)
 async function saveToLocalFile(data: any) {
+  // If we are on Vercel (or any serverless environment), writing to the filesystem may fail
+  if (process.env.VERCEL) {
+    console.warn('[API] Skipping local file storage on Vercel.');
+    return { id: 'vercel-' + Date.now(), created_at: new Date().toISOString() };
+  }
+
   try {
     const dataDir = path.join(process.cwd(), 'data');
     const filePath = path.join(dataDir, 'submissions.json');
-
-    // Ensure data directory exists
     await fs.mkdir(dataDir, { recursive: true });
 
     let submissions = [];
     try {
       const fileContent = await fs.readFile(filePath, 'utf-8');
       submissions = JSON.parse(fileContent);
-    } catch (e) {
-      // File doesn't exist or is empty
-    }
+    } catch (e) { /* ignore */ }
 
     const newEntry = {
       id: Date.now(),
@@ -47,39 +52,19 @@ async function saveToLocalFile(data: any) {
 export async function POST(request: Request) {
   try {
     const body: RequestBody = await request.json();
+    console.log('[API] New submission received:', body);
 
-    // Validate phone number if provided
+    // Basic validation
     if (body.phoneNumber) {
-      const phoneRegex = /^[0-9]{10,15}$/;
-      if (!phoneRegex.test(body.phoneNumber.replace(/\D/g, ''))) {
-        return Response.json(
-          { error: 'Invalid phone number. Please enter 10 digits.' },
-          { status: 400 }
-        );
+      const digits = body.phoneNumber.replace(/\D/g, '');
+      if (digits.length < 10) {
+        return Response.json({ error: 'Phone number too short' }, { status: 400 });
       }
     }
-
-    // Validate coordinates if provided
-    if (typeof body.latitude === 'number' || typeof body.longitude === 'number') {
-      if (
-        typeof body.latitude !== 'number' ||
-        typeof body.longitude !== 'number' ||
-        body.latitude < -90 ||
-        body.latitude > 90 ||
-        body.longitude < -180 ||
-        body.longitude > 180
-      ) {
-        return Response.json(
-          { error: 'Invalid location coordinates.' },
-          { status: 400 }
-        );
-      }
-    }
-
-    let result;
 
     if (sql) {
       try {
+        console.log('[API] Saving to database...');
         const dbResult = await sql`
           INSERT INTO user_signups (latitude, longitude, phone_number)
           VALUES (
@@ -89,28 +74,43 @@ export async function POST(request: Request) {
           )
           RETURNING id, created_at;
         `;
-        result = { id: dbResult[0].id, timestamp: dbResult[0].created_at };
-      } catch (dbError) {
-        console.warn('[API] Database insertion failed, falling back to local file:', dbError);
-        const fileEntry = await saveToLocalFile(body);
-        result = { id: fileEntry.id, timestamp: fileEntry.created_at };
+
+        return Response.json({
+          success: true,
+          message: 'Data saved to database!',
+          id: dbResult[0].id,
+          timestamp: dbResult[0].created_at,
+        });
+      } catch (dbError: any) {
+        console.error('[API] Database Error:', dbError.message);
+
+        // If DATABASE_URL is wrong or connection fails, we only try local file if NOT on vercel
+        if (!process.env.VERCEL) {
+          const fileEntry = await saveToLocalFile(body);
+          return Response.json({
+            success: true,
+            message: 'Saved to local file (Database failed)',
+            id: fileEntry.id,
+            timestamp: fileEntry.created_at,
+          });
+        }
+
+        throw dbError; // On Vercel, re-throw to give a 500 with meaningful logs
       }
     } else {
-      console.log('[API] Using local file storage (No Neon DATABASE_URL found)');
+      // No DATABASE_URL provided
       const fileEntry = await saveToLocalFile(body);
-      result = { id: fileEntry.id, timestamp: fileEntry.created_at };
+      return Response.json({
+        success: true,
+        message: 'Saved to local storage',
+        id: fileEntry.id,
+        timestamp: fileEntry.created_at,
+      });
     }
-
-    return Response.json({
-      success: true,
-      message: 'Your data has been saved successfully!',
-      id: result.id,
-      timestamp: result.timestamp,
-    });
-  } catch (error) {
-    console.error('[API] Error submitting data:', error);
+  } catch (error: any) {
+    console.error('[API] Critical Error:', error.message);
     return Response.json(
-      { error: 'Failed to process your request. Please try again.' },
+      { error: 'Failed to process request: ' + error.message },
       { status: 500 }
     );
   }
