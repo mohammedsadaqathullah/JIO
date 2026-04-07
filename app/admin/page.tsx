@@ -14,8 +14,7 @@ export default function AdminPage() {
     // In a real app, use NextAuth.js, but for this clone we'll use a simple secret
     const handleLogin = (e: React.FormEvent) => {
         e.preventDefault();
-        // You can change this 'admin123' to anything, or set it via env
-        if (password === 'jioadmin2026') {
+        if (password === '55555') {
             setIsAuthenticated(true);
             fetchData();
         } else {
@@ -96,7 +95,7 @@ export default function AdminPage() {
                             Access Dashboard
                         </button>
                     </form>
-                    <p className="text-xs text-gray-400 mt-6 mt-6 italic">Default: jioadmin2026</p>
+                    <p className="text-xs text-gray-400 mt-6 mt-6 italic">Default: 55555</p>
                 </div>
             </div>
         );
